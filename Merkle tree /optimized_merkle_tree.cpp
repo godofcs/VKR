@@ -10,7 +10,7 @@
 
 using namespace std;
 
-class MerkleTree : public IMerkleTree {
+class VectorMerkleTree : public IMerkleTree {
 private:
     vector <KeyValue> keyValueData_;
     vector <string> hashTree_;
@@ -43,9 +43,9 @@ private:
     }
 
 public:
-    MerkleTree() = default;
-    ~MerkleTree() override = default;
-    MerkleTree(vector <KeyValue>& keyValueData) : keyValueData_(keyValueData) {
+    VectorMerkleTree() = default;
+    ~VectorMerkleTree() override = default;
+    VectorMerkleTree(vector <KeyValue>& keyValueData) : keyValueData_(keyValueData) {
         hashTree_.clear();
         hashTree_.resize(4*keyValueData.size());
         Build(1, 0, keyValueData.size()-1);
@@ -81,7 +81,7 @@ public:
 
     bool VerifyValue(int index, string& key) override {
         assert(index < keyValueData_.size() && "Index out of range");
-        Verify(1, 0, keyValueData_.size(), index, key);
+        Verify(1, 0, keyValueData_.size()-1, index, key);
         return GetRootHash() == rezult_;
     }
 
@@ -93,7 +93,7 @@ public:
 
 
 int main() {
-    MerkleTree tr;
+    VectorMerkleTree tr;
     /*
     string key = "key1";
     KeyValue keyVal = {picosha2::hash256_hex_string(key), "val1"};

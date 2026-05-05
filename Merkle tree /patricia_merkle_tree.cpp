@@ -36,6 +36,7 @@ private:
 
     shared_ptr <Node> root_ = nullptr;
     string rezult_;
+    shared_ptr <Node> rezult_node_ = nullptr;
     string pref_;
     vector <string_view> prev_hash_{17};
 
@@ -242,7 +243,6 @@ private:
                     UpdateHash(rez.second, key);
                     return {DeletedType::UPDATED, rez.second};
                 } else if (rez.second->type == NodeType::BRANCH) {
-                    // impossible
                     assert(true && "rez.second->type == NodeType::BRANCH when rez.first == DeletedType::USELESS_BRANCH");
                     return {DeletedType::UPDATED, cur_node};
                 }
@@ -307,30 +307,51 @@ private:
         return {DeletedType::NOT_DELETED, nullptr};
     }
 
-    bool Verify(shared_ptr<Node> cur_node, const string& key, int ind) {
+    void Verify(shared_ptr<Node> cur_node, const string& key, int ind) {
         if (cur_node == nullptr) {
-            return false;
+            rezult_node_ = nullptr;
+            return;
         }
         if (cur_node->type == NodeType::LEAF) {
-            CommonPrefix(cur_node->path, key, ind);
-            if (key.size() == pref_.size() + ind) {
-                return true;
-            }
-            return false;
+            rezult_node_ = CreateNode(NodeType::LEAF);
+            rezult_node_->path = cur_node->path;
+            rezult_node_->value = cur_node->value;
+            UpdateHash(rezult_node_, key);
+            return;
         } else if (cur_node->type == NodeType::EXTENSION) {
             CommonPrefix(cur_node->path, key, ind);
+            shared_ptr <Node> tmp_node = nullptr;
             if (pref_.size() == cur_node->path.size()) {
-                return Verify(cur_node->children[0], key, ind + pref_.size());
+                tmp_node = CreateNode(NodeType::EXTENSION);
+                tmp_node->path = cur_node->path;
+                Verify(cur_node->children[0], key, ind + pref_.size());
+                tmp_node->children[0] = rezult_node_;
+                rezult_node_ = tmp_node;
+                UpdateHash(rezult_node_, key);
+                return;
             }
-            return false;
+            rezult_node_ = nullptr;
+            return;
         } else if (cur_node->type == NodeType::BRANCH) {
+            shared_ptr <Node> tmp_node = CreateNode(NodeType::BRANCH);
+            tmp_node->value = cur_node->value;
+            for (int i = 0; i < 16; ++i) {
+                tmp_node->children[i] = cur_node->children[i];
+            }
             if (ind == key.size()) {
-                return cur_node->value.empty();
+                rezult_node_ = tmp_node;
+                UpdateHash(rezult_node_, key);
+                return;
             }
             int next_symb = FromCharToInt(key[ind]);
-            return Verify(cur_node->children[next_symb], key, ind+1);
+            Verify(cur_node->children[next_symb], key, ind+1);
+            tmp_node->children[next_symb] = rezult_node_;
+            rezult_node_ = tmp_node;
+            UpdateHash(rezult_node_, key);
+            return;
         }
-        return false;
+        rezult_node_ = nullptr;
+        return;
     }
 
     void Get(shared_ptr<Node> cur_node, const string& key, int ind) {
@@ -365,7 +386,7 @@ public:
     ~PatriciaMerkleTree() override = default;
 
     PatriciaMerkleTree(const vector <KeyValue>& key_value_data) {
-        root_ = make_shared<Node>();
+        root_ = nullptr;
         for (const auto& key_value: key_value_data) {
             UpdateValue(key_value);
         }
@@ -393,7 +414,11 @@ public:
     }
 
     bool VerifyValue(const string& key) override {
-        return Verify(root_, key, 0);
+        Verify(root_, key, 0);
+        if (root_ == nullptr) {
+            return rezult_node_ == nullptr;
+        }
+        return rezult_node_->hash == root_->hash;
     }
 
     string GetValue(const string& key) override {
@@ -402,71 +427,3 @@ public:
         return rezult_;
     }
 };
-
-
-int main() {
-    PatriciaMerkleTree tr;
-    KeyValue key_value;
-    string key = "key1";
-    key_value.key = picosha2::hash256_hex_string(key);
-    key_value.value = "val1";
-    tr.UpdateValue(key_value);
-    cout << "Root_hash: " << tr.GetRootHash() << "\n";
-    cout << "get: " << tr.GetValue(key_value.key) << "\n";
-    cout << "\n";
-    key = "key2";
-    key_value.key = picosha2::hash256_hex_string(key);
-    key_value.value = "val2";
-    tr.UpdateValue(key_value);
-    cout << "Root_hash: " << tr.GetRootHash() << "\n";
-    cout << "get: " << tr.GetValue(key_value.key) << "\n";
-    cout << "\n";
-    key = "key3";
-    key_value.key = picosha2::hash256_hex_string(key);
-    key_value.value = "val3";
-    tr.UpdateValue(key_value);
-    cout << "Root_hash: " << tr.GetRootHash() << "\n";
-    cout << "get: " << tr.GetValue(key_value.key) << "\n";
-    cout << "\n";
-    key = "key4";
-    key_value.key = picosha2::hash256_hex_string(key);
-    key_value.value = "val4";
-    tr.UpdateValue(key_value);
-    cout << "Root_hash: " << tr.GetRootHash() << "\n";
-    cout << "get: " << tr.GetValue(key_value.key) << "\n";
-    cout << "\n";
-    key = "key5";
-    key_value.key = picosha2::hash256_hex_string(key);
-    key_value.value = "val5";
-    tr.UpdateValue(key_value);
-    cout << "Root_hash: " << tr.GetRootHash() << "\n";
-    cout << "get: " << tr.GetValue(key_value.key) << "\n";
-    cout << "\n";
-    
-    cout << "Root_hash: " << tr.GetRootHash() << "\n";
-    key = "key3";
-    if (tr.VerifyValue(picosha2::hash256_hex_string(key))) {
-        cout << "Verify Val3: " << tr.GetValue(picosha2::hash256_hex_string(key)) << "\n";
-    }
-    tr.DeleteValue(picosha2::hash256_hex_string(key));
-    if (tr.VerifyValue(picosha2::hash256_hex_string(key))) {
-        cout << "Verify Val3: " << tr.GetValue(picosha2::hash256_hex_string(key)) << "\n";
-    }
-    cout << "Root_hash: " << tr.GetRootHash() << "\n";
-    key = "key2";
-    if (tr.VerifyValue(picosha2::hash256_hex_string(key))) {
-        cout << "Verify Val2: " << tr.GetValue(picosha2::hash256_hex_string(key)) << "\n";
-    }
-    key = "key1";
-    if (tr.VerifyValue(picosha2::hash256_hex_string(key))) {
-        cout << "Verify Val1: " << tr.GetValue(picosha2::hash256_hex_string(key)) << "\n";
-    }
-    tr.DeleteValue(picosha2::hash256_hex_string(key));
-    if (tr.VerifyValue(picosha2::hash256_hex_string(key))) {
-        cout << "Verify Val1: " << tr.GetValue(picosha2::hash256_hex_string(key)) << "\n";
-    }
-    key = "key2";
-    if (tr.VerifyValue(picosha2::hash256_hex_string(key))) {
-        cout << "Verify Val2: " << tr.GetValue(picosha2::hash256_hex_string(key)) << "\n";
-    }
-}
