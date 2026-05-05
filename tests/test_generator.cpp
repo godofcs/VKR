@@ -15,7 +15,7 @@
 
 #ifdef USE_POINTER_IMPL
     #include "../Merkle tree /merkle_tree.cpp"
-    using TestedMerkleTree = PointerMerkleTree;
+    using TestedMerkleTree = MerkleTree;
     static constexpr const char* IMPL_NAME = "Merkle Tree on shared_ptr";
 #elif defined(USE_VECTOR_IMPL)
     #include "../Merkle tree /optimized_merkle_tree.cpp"
