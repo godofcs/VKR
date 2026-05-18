@@ -1,361 +1,295 @@
 # Гетерогенная реализация дерева Меркла на C++
 
-Четыре единообразно реализованные версии дерева Меркла на языке C++17 — для применения в задачах упрощённой верификации платежей в блокчейне (SPV), аутентифицированного хранения key-value состояния и других сценариев, где требуется компактное доказательство принадлежности данных множеству.
+Четыре структурно-разнородные реализации дерева Меркла на языке C++17 под
+общим прикладным интерфейсом SPV-протокола. Каждая реализация поставляется
+отдельной динамической библиотекой (`.so`), стенд испытаний подгружает их
+через `dlopen` и проводит функциональные проверки, замеры производительности
+и расчёт интегрального критерия сравнительной оценки.
 
-Все реализации используют криптографическую хеш-функцию **SHA-256** (заголовочная библиотека [picosha2](https://github.com/okdshin/PicoSHA2)) и работают с парами ключ–значение типа `KeyValue`.
+В качестве криптографической хеш-функции используется header-only
+[picosha2](https://github.com/okdshin/PicoSHA2) (SHA-256). Внешних
+динамических зависимостей у проекта нет.
 
 ---
 
 ## Содержание
 
-1. [Что реализовано](#что-реализовано)
+1. [Реализации](#реализации)
 2. [Структура проекта](#структура-проекта)
 3. [Требования к сборке](#требования-к-сборке)
-4. [Подключение в свой проект](#подключение-в-свой-проект)
-5. [Использование](#использование)
+4. [Сборка и запуск](#сборка-и-запуск)
+5. [Подключение к стороннему проекту](#подключение-к-стороннему-проекту)
 6. [Создание собственной реализации](#создание-собственной-реализации)
-7. [Запуск тестирования](#запуск-тестирования)
-8. [Сравнительные характеристики](#сравнительные-характеристики)
-9. [Когда какую реализацию выбирать](#когда-какую-реализацию-выбирать)
+7. [Аналитический модуль и критерий K(r)](#аналитический-модуль-и-критерий-kr)
+8. [Известные ограничения](#известные-ограничения)
 
 ---
 
-## Что реализовано
+## Реализации
 
-| Реализация | Класс | Файл | Адресация листьев |
+| Реализация | Файл | Класс | Адресация листьев |
 |---|---|---|---|
-| Классическое дерево на `shared_ptr` | `MerkleTree` | `merkle_tree.cpp` | по индексу |
-| Оптимизированное дерево на `vector<string>` | `MerkleTree` | `optimized_merkle_tree.cpp` | по индексу |
-| Radix-дерево Меркла | `RadixMerkleTree` | `radix_merkle_tree.cpp` | по ключу |
-| Дерево Меркла-Патриции | `PatriciaMerkleTree` | `patricia_merkle_tree.cpp` | по ключу |
+| Классическое бинарное дерево на `shared_ptr` | `MerkleTrees/MerkleTree/merkle_tree.cpp` | `MerkleTree` | по позиции |
+| Оптимизированное бинарное дерево на массиве | `MerkleTrees/OptimizedMerkleTree/optimized_merkle_tree.cpp` | `VectorMerkleTree` | по позиции |
+| Radix-дерево Меркла (16-ричный trie без сжатия) | `MerkleTrees/RadixMerkleTree/radix_merkle_tree.cpp` | `RadixMerkleTree` | по строковому ключу |
+| Дерево Меркла-Патриции (Modified MPT) | `MerkleTrees/PatriciaMerkleTree/patricia_merkle_tree.cpp` | `PatriciaMerkleTree` | по строковому ключу |
 
-Бинарные реализации (классическая и оптимизированная) работают с интерфейсом `IMerkleTree` из `Interfaces/merkle_tree_interface.h` — адресация по позиции в исходной последовательности.
-
-Trie-варианты (Radix и Patricia) работают с интерфейсом `IMerkleTree` из `Interfaces/merkle_trie_interface.h` — адресация по строковому ключу. Это два разных интерфейса с одинаковым именем, разделение обусловлено принципиально различной моделью адресации листьев.
+Бинарные реализации используют интерфейс `IMerkleTree` из
+`Interfaces/merkle_tree_interface.h` (адресация по позиции в исходной
+последовательности). Trie-варианты используют одноимённый интерфейс
+`IMerkleTree` из `Interfaces/merkle_trie_interface.h` (адресация по
+строковому ключу). Это два разных интерфейса с одинаковым именем класса —
+в один TU включать оба нельзя. На уровне `IFullClient`/`ILightClient`
+(см. `Interfaces/merkle_client.h`) различие скрыто.
 
 ---
 
 ## Структура проекта
 
 ```
-VKR-master/
-└── Merkle trees/
-    ├── Interfaces/
-    │   ├── merkle_tree_interface.h        # IMerkleTree для бинарных деревьев (по индексу)
-    │   └── merkle_trie_interface.h        # IMerkleTree для trie-вариантов (по ключу)
-    ├── Merkle tree/
-    │   ├── merkle_tree.cpp                # классическое на shared_ptr
-    │   ├── optimized_merkle_tree.cpp      # на массиве (компактная индексация 2i, 2i+1)
-    │   ├── radix_merkle_tree.cpp          # 16-арное Radix-дерево
-    │   └── patricia_merkle_tree.cpp       # дерево Меркла-Патриции
-    ├── utils/
-    │   ├── struct.h                       # тип KeyValue
-    │   ├── string_sum.cpp                 # конкатенация строк
-    │   └── SHA256/sha256.h                # picosha2
-    └── tests/
-        ├── test_generator.cpp             # тесты для бинарных деревьев
-        ├── test_trie_generator.cpp        # тесты для trie-вариантов
-        └── Makefile
+VKR/
+├── Interfaces/
+│   ├── merkle_client.h               # IFullClient, ILightClient (общий контракт SPV)
+│   ├── merkle_tree_interface.h       # IMerkleTree для бинарных деревьев (по индексу)
+│   └── merkle_trie_interface.h       # IMerkleTree для trie-вариантов (по ключу)
+├── MerkleTrees/
+│   ├── MerkleTree/
+│   │   ├── merkle_tree.cpp           # реализация (≈ 290 строк)
+│   │   ├── merkle_tree_dll.cpp       # обёртка с экспортом фабричных функций
+│   │   └── libmerkle_tree.so         # результат сборки
+│   ├── OptimizedMerkleTree/          # на массиве 2i / 2i+1 (≈ 230 строк)
+│   ├── RadixMerkleTree/              # 16-ричный trie (≈ 320 строк)
+│   └── PatriciaMerkleTree/           # Modified MPT с EXTENSION/LEAF/BRANCH (≈ 570 строк)
+├── utils/
+│   ├── struct.h                      # KeyValue { string key; string value; }
+│   ├── string_sum.cpp                # вспомогательная функция (в проекте не используется)
+│   └── SHA256/sha256.h               # picosha2 (header-only SHA-256)
+├── tests/
+│   ├── analyzer.h                  # модуль нормировки и интегрального критерия K(r)
+│   ├── test_stand.cpp                # стенд по одной библиотеке
+│   ├── compare_stand.cpp             # стенд с ранжированием по нескольким библиотекам
+│   ├── build.sh                      # сборка 4 .so + двух стендов
+│   └── run.sh                        # запуск test_stand по всем собранным .so
+└── README.md
 ```
 
 ---
 
 ## Требования к сборке
 
-- Компилятор с поддержкой C++17 (GCC 9+, Clang 10+)
-- POSIX-окружение (Linux, macOS) — для замера памяти в тестах через `getrusage` и `/proc/self/statm`
-- GNU Make — для сборки тестов
+- Компилятор с поддержкой стандарта C++17: GCC 9+ или Clang 10+.
+- Linux семейства Debian/Ubuntu (целевая платформа разработки —
+  Ubuntu 22.04 LTS, GCC 11). Стенд использует `/proc/self/statm` для
+  оценки RSS, поэтому без модификации работает только под Linux.
+- Bash (для скриптов `build.sh`/`run.sh`).
+- Внешних библиотек устанавливать не требуется — `picosha2` лежит в
+  составе проекта.
 
-Внешних зависимостей нет — `picosha2` поставляется в составе проекта.
-
----
-
-## Подключение в свой проект
-
-### Бинарное дерево Меркла
-
-Подключите один из двух файлов:
-
-```cpp
-#include "Merkle tree/merkle_tree.cpp"            // на shared_ptr
-// или
-#include "Merkle tree/optimized_merkle_tree.cpp"  // на массиве (быстрее)
-```
-
-В обоих файлах класс называется `MerkleTree`. Если нужно использовать обе версии в одном проекте, оберните их в namespace или переименуйте макросом — пример такой схемы можно посмотреть в `tests/test_generator.cpp`.
-
-### Trie-варианты
-
-```cpp
-#include "Merkle tree/radix_merkle_tree.cpp"      // Radix
-// или
-#include "Merkle tree/patricia_merkle_tree.cpp"   // Patricia (рекомендуется)
-```
-
-Классы называются `RadixMerkleTree` и `PatriciaMerkleTree` — конфликта имён нет. Но интерфейс `IMerkleTree` определяется в обоих файлах (через общий заголовок), поэтому без include guards подключать оба `.cpp` сразу в одну единицу трансляции нельзя — компилируйте их раздельно.
+Используемые флаги: `-std=c++17 -O2 -Wall -fPIC -shared` для библиотек,
+`-std=c++17 -O2 -Wall` для исполняемых модулей. Стенды линкуются с `-ldl`.
 
 ---
 
-## Использование
+## Сборка и запуск
 
-### Тип `KeyValue`
+```bash
+cd VKR/tests
+./build.sh           # соберёт 4 .so, test_stand, compare_stand
+./run.sh             # запустит test_stand по каждой собранной .so
+```
+
+`build.sh` собирает динамические библиотеки в каталогах
+`MerkleTrees/<Имя>/` и оба стенда — в `tests/`.
+
+`run.sh` принимает два опциональных аргумента — список размеров наборов
+через запятую и число повторов на одну операцию:
+
+```bash
+./run.sh                          # размеры 1000,10000 (10 повторов)
+./run.sh "100,1000,10000"         # свои размеры
+./run.sh "100,1000" 100           # 100 повторов
+```
+
+### Прямой запуск `test_stand`
+
+```bash
+./test_stand <path-to-lib.so> [sizes_csv] [repeats]
+# например:
+./test_stand ../MerkleTrees/PatriciaMerkleTree/libpatricia_merkle_tree.so "100,1000" 10
+```
+
+По умолчанию: `sizes_csv = 1000,10000`, `repeats = 100` (внутри стенда; в
+`run.sh` дефолт — 10).
+
+### Запуск `compare_stand` с расчётом критерия K(r)
+
+```bash
+./compare_stand [--sizes 100,1000] [--repeats 10] \
+                [--weights b,u,i,d,v,p,m,l] \
+                <lib1.so> <lib2.so> [...]
+```
+
+`compare_stand` выполняет полный двухэтапный критерий из подраздела 1.3
+работы: пороговую фильтрацию по функциональным и интеграционным
+требованиям + аддитивную свёртку эксплуатационных показателей. Подробности —
+ниже в разделе [Аналитический модуль](#аналитический-модуль-и-критерий-kr).
+
+Пример:
+
+```bash
+./compare_stand --sizes 100,1000 --repeats 10 \
+    ../MerkleTrees/MerkleTree/libmerkle_tree.so \
+    ../MerkleTrees/OptimizedMerkleTree/liboptimized_merkle_tree.so \
+    ../MerkleTrees/RadixMerkleTree/libradix_merkle_tree.so \
+    ../MerkleTrees/PatriciaMerkleTree/libpatricia_merkle_tree.so
+```
+
+---
+
+## Подключение к стороннему проекту
+
+Каждая реализация экспортирует четыре фабричные функции с C-компоновкой —
+имена единообразны во всех четырёх библиотеках:
 
 ```cpp
-struct KeyValue {
-    std::string key;
-    std::string value;
+extern "C" {
+    IFullClient*  CreateMerkleFullClient();
+    ILightClient* CreateMerkleLightClient();
+    void          DestroyMerkleFullClient(IFullClient*);
+    void          DestroyMerkleLightClient(ILightClient*);
+}
+```
+
+### Режим 1 — статическая линковка
+
+```bash
+g++ -std=c++17 -O2 my_app.cpp \
+    -L<path>/MerkleTrees/MerkleTree -lmerkle_tree \
+    -o my_app
+```
+
+`my_app.cpp` подключает только заголовок `Interfaces/merkle_client.h`.
+При запуске бинарник должен находить нужную `.so` (через
+`LD_LIBRARY_PATH` или размещение в `/usr/local/lib`).
+
+### Режим 2 — динамическая загрузка
+
+```cpp
+#include "Interfaces/merkle_client.h"
+#include <dlfcn.h>
+
+void* h = dlopen("libmerkle_tree.so", RTLD_NOW);
+auto create_full  = reinterpret_cast<IFullClient* (*)()>(dlsym(h, "CreateMerkleFullClient"));
+auto destroy_full = reinterpret_cast<void (*)(IFullClient*)>(dlsym(h, "DestroyMerkleFullClient"));
+
+IFullClient* full = create_full();
+full->Build(data);
+auto proof = full->RequestProof(key);
+/*...*/
+destroy_full(full);
+dlclose(h);
+```
+
+Поскольку имена фабричных функций единообразны, переключение между
+реализациями сводится к подмене имени `.so`.
+
+### API в двух словах
+
+```cpp
+struct KeyValue { string key; string value; };
+
+class IFullClient {
+public:
+    virtual void              Build(const vector<KeyValue>& data) = 0;
+    virtual string            GetRootHash() const                 = 0;
+    virtual void              Update(const KeyValue& kv)          = 0;
+    virtual void              Delete(const string& key)           = 0;
+    virtual vector<uint8_t>   RequestProof(const string& key)     = 0;
+};
+
+class ILightClient {
+public:
+    virtual void  SetRootHash(const string& root_hash)                          = 0;
+    virtual bool  VerifyProof(const KeyValue& kv,
+                              const vector<uint8_t>& proof_bytes) const         = 0;
 };
 ```
 
-Ключ — как правило, шестнадцатеричное представление SHA-256-хеша исходного ключа (64 символа). Значение — произвольная строка.
-
-### Бинарное дерево Меркла
-
-```cpp
-#include "Merkle tree/optimized_merkle_tree.cpp"
-#include <vector>
-#include <iostream>
-
-int main() {
-    // Подготовка набора данных
-    std::vector<KeyValue> data;
-    for (int i = 0; i < 1000; ++i) {
-        KeyValue kv;
-        kv.key   = picosha2::hash256_hex_string("tx_" + std::to_string(i));
-        kv.value = "amount: " + std::to_string(i);
-        data.push_back(kv);
-    }
-
-    // Построение дерева
-    MerkleTree tree(data);
-
-    // Корневой хеш (для записи в заголовок блока)
-    std::cout << "Root: " << tree.GetRootHash() << "\n";
-
-    // Верификация принадлежности (центральная операция SPV)
-    std::string key = data[42].key;
-    bool ok = tree.VerifyValue(42, key);
-
-    // Получение значения по индексу
-    std::string value = tree.GetValue(42);
-
-    // Обновление значения
-    KeyValue new_kv = { data[42].key, "new_amount" };
-    tree.UpdateValue(new_kv, 42);
-
-    // Удаление элемента (со сдвигом последующих)
-    tree.DeleteValue(42);
-}
-```
-
-### Дерево Меркла-Патриции
-
-```cpp
-#include "Merkle tree/patricia_merkle_tree.cpp"
-#include <iostream>
-
-int main() {
-    // Способ 1: пустое дерево + последовательные вставки
-    PatriciaMerkleTree tree;
-
-    KeyValue kv;
-    kv.key   = picosha2::hash256_hex_string("0xAlice");
-    kv.value = "1000";
-    tree.UpdateValue(kv);
-
-    // Корневой хеш
-    std::cout << "Root: " << tree.GetRootHash() << "\n";
-
-    // Верификация и получение
-    if (tree.VerifyValue(kv.key)) {
-        std::cout << "value = " << tree.GetValue(kv.key) << "\n";
-    }
-
-    // Удаление по ключу
-    tree.DeleteValue(kv.key);
-
-    // Способ 2: построение из готового набора
-    std::vector<KeyValue> data = /* ... */ {};
-    PatriciaMerkleTree from_data(data);
-}
-```
-
-### Radix-дерево Меркла
-
-Использование идентично Patricia — общий интерфейс:
-
-```cpp
-#include "Merkle tree/radix_merkle_tree.cpp"
-
-RadixMerkleTree tree;
-tree.UpdateValue({ hex_key, "value" });
-bool ok = tree.VerifyValue(hex_key);
-std::string v = tree.GetValue(hex_key);
-tree.DeleteValue(hex_key);
-```
+`Update` совмещает Insert и собственно Update: если ключа в дереве нет —
+вставляется, если есть — значение перезаписывается. После каждой мутирующей
+операции на стороне `IFullClient` лёгкому клиенту необходимо передавать
+актуальный корневой хеш через `SetRootHash`.
 
 ---
 
 ## Создание собственной реализации
 
-### Бинарное дерево (адресация по индексу)
+Чтобы добавить пятую реализацию:
 
-```cpp
-#include "../Interfaces/merkle_tree_interface.h"
-#include "../utils/SHA256/sha256.h"
-
-class MyMerkleTree : public IMerkleTree {
-public:
-    MyMerkleTree() = default;
-    MyMerkleTree(std::vector<KeyValue>& data) {
-        // Построение дерева по data
-    }
-    ~MyMerkleTree() override = default;
-
-    std::string GetRootHash() override                       { /* ... */ }
-    void        DeleteValue(int index) override             { /* ... */ }
-    void        UpdateValue(KeyValue& kv, int index) override { /* ... */ }
-    bool        VerifyValue(int index, std::string& key) override { /* ... */ }
-    std::string GetValue(int index) override                { /* ... */ }
-};
-```
-
-### Trie-вариант (адресация по ключу)
-
-```cpp
-#include "../Interfaces/merkle_trie_interface.h"
-#include "../utils/SHA256/sha256.h"
-
-class MyTrieTree : public IMerkleTree {
-public:
-    MyTrieTree() = default;
-    MyTrieTree(const std::vector<KeyValue>& data) {
-        for (const auto& kv : data) UpdateValue(kv);
-    }
-    ~MyTrieTree() override = default;
-
-    std::string GetRootHash() override                          { /* ... */ }
-    void        DeleteValue(const std::string& key) override   { /* ... */ }
-    void        UpdateValue(const KeyValue& kv) override       { /* ... */ }
-    bool        VerifyValue(const std::string& key) override   { /* ... */ }
-    std::string GetValue(const std::string& key) override      { /* ... */ }
-};
-```
-
-После реализации новый класс автоматически совместим с тестовым каркасом — достаточно подменить `using TestedMerkleTree = ...` или `using TestedTrie = ...` в соответствующем тестовом файле.
+1. Создайте каталог `MerkleTrees/<Имя>/`.
+2. Реализуйте классы, удовлетворяющие интерфейсам `IFullClient` и
+   `ILightClient` из `Interfaces/merkle_client.h`.
+3. Создайте обёртку `<имя>_dll.cpp` с экспортом четырёх фабричных функций (по образцу `merkle_tree_dll.cpp`).
+4. Добавьте строку в `tests/build.sh`:
+   ```bash
+   build_lib "$ROOT/MerkleTrees/<Имя>" "<имя>_dll.cpp" "lib<имя>.so"
+   ```
+5. После сборки `run.sh` и `compare_stand` подхватят новую реализацию без модификации стенда.
 
 ---
 
-## Запуск тестирования
+## Аналитический модуль и критерий K(r)
 
-В каталоге `tests/` находятся два тестовых файла, реализующих нагрузочное тестирование с замером времени всех основных операций и потребления памяти.
+Модуль `tests/analyzer.h` реализует двухэтапный критерий сравнительной оценки.
 
-### Сборка
+### Этап 1 — пороговый фильтр
 
-```bash
-cd "Merkle trees/tests"
-make all
+Реализация исключается из дальнейшего сравнения, если не выполнено хотя бы
+одно из требований:
+
+- соответствие единому интерфейсу (`conforms_to_interface`);
+- оформление в виде динамической библиотеки (`packaged_as_dll`);
+- переносимость между ОС (`portable`);
+- воспроизводимость сборки (`reproducible_build`);
+- наличие документации (`has_documentation`);
+- прохождение функциональных проверок стенда (`correctness_passed`).
+
+В `compare_stand` первые пять флагов фиксируются как «выполнено» (они
+обеспечиваются самим способом сборки и поставки), `correctness_passed`
+определяется по результату прогона функциональных проверок.
+
+### Этап 2 — аддитивная свёртка
+
+Для каждого эксплуатационного показателя выполняется min-max-нормировка
+к отрезку [0, 1] в направлении «больше — лучше»:
+
+```
+f_i(r) = (x_max - x_i) / (x_max - x_min)         для «меньше — лучше»
+f_i(r) = 1                                       если x_max == x_min
 ```
 
-Будет собрано четыре бинарника:
+`x_min` и `x_max` вычисляются по реализациям, прошедшим фильтр.
+Лидирующая по показателю реализация получает 1, отстающая — 0,
+остальные — линейно интерполированы.
 
-| Бинарник | Тестируемая реализация |
+Интегральный критерий:
+
+```
+K(r) = Σ w_i · f_i(r),   Σ w_i = 1,   w_i ≥ 0.
+```
+
+В `compare_stand` веса задаются опцией `--weights b,u,i,d,v,p,m,l`
+(по умолчанию — единичные, нормируются модулем к Σ = 1). Порядок весов:
+
+| позиция | показатель |
 |---|---|
-| `test_pointer` | бинарное дерево на `shared_ptr` |
-| `test_vector` | бинарное дерево на `vector<string>` |
-| `test_radix` | Radix-дерево Меркла |
-| `test_patricia` | дерево Меркла-Патриции |
-
-### Прогон тестов с размерами по умолчанию
-
-```bash
-make run        # все четыре теста подряд
-make run-bin    # только бинарные деревья
-make run-trie   # только trie-варианты
-```
-
-Размеры по умолчанию:
-
-| Тест | Размеры наборов данных |
-|---|---|
-| `test_pointer`, `test_vector` | 1 000, 10 000, 100 000, от 1·10⁶ до 1·10⁷ с шагом 1·10⁶ |
-| `test_radix` | 1 000, 10 000, 100 000 (на бо́льших — нехватка памяти) |
-| `test_patricia` | 1 000, 10 000, 100 000, 1·10⁶ |
-
-### Прогон с произвольными размерами
-
-Передайте размеры как первый аргумент через запятую:
-
-```bash
-./test_pointer "1000,10000,100000"
-./test_patricia "1000,10000,100000,500000,1000000"
-./test_radix "5000,20000"
-```
-
-### Что замеряется
-
-Для каждой реализации и каждого размера набора измеряется:
-
-- **build** — время построения дерева по полному набору
-- **verify** — среднее время одной верификации принадлежности
-- **get** — среднее время одной выборки значения по ключу (только trie)
-- **update** — среднее время одного точечного обновления
-- **delete** — среднее время одного удаления (только trie)
-- **mem build** — пиковый прирост RSS при построении (объём памяти, занимаемой деревом)
-- **RSS after** — текущий RSS сразу после построения (на Linux — точное значение из `/proc/self/statm`)
-- **peak** — пиковый RSS за весь прогон (только бинарные тесты)
-
-### Пример вывода
-
-```
-==============================================================
-Implementation: Merkle Tree on vector<string>
-Hash function:  SHA-256 (picosha2)
-==============================================================
-Run for n = 10000 ... done in 2.7 s.
-Run for n = 100000 ... done in 3.2 s.
-
---- Summary ----------------------------------------------------
-n =    10000 | build =     25.760 ms | verify avg =    0.029 ms | update avg =     23.584 ms | mem build =     4.1 MB | RSS after =     8.4 MB | peak =     8.2 MB
-n =   100000 | build =    247.530 ms | verify avg =    0.039 ms | update avg =    259.427 ms | mem build =    41.2 MB | RSS after =    57.9 MB | peak =    57.8 MB
-----------------------------------------------------------------
-Last root hash: e7a172a404482123cd512fb7640d13e19322785c2ff1376157ec35132dc341c8
-```
-
-### Очистка
-
-```bash
-make clean
-```
+| `b` | время построения |
+| `u` | среднее время обновления |
+| `i` | среднее время вставки |
+| `d` | среднее время удаления |
+| `v` | среднее время верификации |
+| `p` | размер сериализованного доказательства |
+| `m` | прирост резидентной памяти при построении |
+| `l` | размер бинарной библиотеки |
 
 ---
-
-## Сравнительные характеристики
-
-| Структура | Адресация | Поиск/верификация | Размер доказательства | Точечное обновление |
-|---|---|---|---|---|
-| Классическое дерево Меркла | по позиции | O(log n) | O(log n) | O(log n) |
-| Дерево Меркла на массиве | по позиции | O(log n) | O(log n) | O(log n) |
-| Radix-дерево Меркла | по ключу | O(L) | O(L · (r − 1)) | O(L) |
-| Дерево Меркла-Патриции | по ключу | O(log_r n) среднее | O(log_r n) среднее | O(log_r n) среднее |
-
-где n — число хранимых пар ключ–значение, L — длина ключа в символах основания r (для SHA-256 в hex: r = 16, L = 64).
-
----
-
-## Когда какую реализацию выбирать
-
-| Сценарий применения | Рекомендуемая реализация | Причина |
-|---|---|---|
-| Bitcoin SPV (статичный набор транзакций блока) | бинарное дерево на массиве | Минимальный размер доказательства, наилучшая локальность по кэшу |
-| Аутентифицированное хранение динамического key-value состояния (Ethereum-style) | дерево Меркла-Патриции | Эффективное обновление по ключу, разумные затраты памяти |
-| Ситуация, когда нужны явные ссылки на узлы дерева | бинарное дерево на `shared_ptr` | Удобно для интеграции с другими структурами C++-проекта |
-| Учебно-исследовательский разбор trie-конструкции | Radix-дерево Меркла | Простая структура без сжатия путей, легче для понимания |
-
-Использовать Radix-дерево в продакшн-системах, как правило, нецелесообразно: оно создаёт ~64 узла на каждый ключ и не масштабируется по памяти за пределы примерно 100 тысяч элементов. Если нужны свойства упорядоченной по ключу адресации — выбирайте Patricia.
-
----
-
-## Лицензия
-
-Учебный проект. Разработан в рамках выпускной квалификационной работы бакалавра по теме «Исследование применимости и производительности гетерогенной реализации дерева Меркла в операциях по упрощённой верификации платежей в блокчейне».
